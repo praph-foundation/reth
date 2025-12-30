@@ -25,6 +25,8 @@ reth-rpc-eth-api = { workspace = true, optional = true }
 alloy-eips.workspace = true
 alloy-evm.workspace = true
 alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+alloy-sol-macro.workspace = true
 alloy-op-evm.workspace = true
 op-alloy-consensus.workspace = true
 op-alloy-rpc-types-engine.workspace = true

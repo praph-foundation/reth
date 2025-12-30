@@ -54,6 +54,88 @@ mod error;
 pub use error::OpBlockExecutionError;
 
 pub use alloy_op_evm::{OpBlockExecutionCtx, OpBlockExecutorFactory, OpEvm, OpEvmFactory};
+// Native ERC-20 precompile logic
+mod native_erc20;
+pub use native_erc20::NATIVE_TOKEN_ADDRESS;
+
+use alloy_primitives::Bytes;
+use op_revm::precompiles::OpPrecompiles;
+use revm::{
+    context::Cfg,
+    context_interface::ContextTr,
+    handler::PrecompileProvider,
+    interpreter::{CallInputs, Gas, InstructionResult, InterpreterResult},
+};
+
+/// PRAPH precompiles provider - extends OpPrecompiles with native ERC-20 at 0x0802
+#[derive(Debug, Clone)]
+pub struct PraphPrecompiles {
+    inner: OpPrecompiles,
+}
+
+impl Default for PraphPrecompiles {
+    fn default() -> Self {
+        Self { inner: OpPrecompiles::default() }
+    }
+}
+
+impl PraphPrecompiles {
+    /// Create new PraphPrecompiles wrapping OpPrecompiles
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<CTX> PrecompileProvider<CTX> for PraphPrecompiles
+where
+    CTX: ContextTr<Cfg: Cfg<Spec = op_revm::OpSpecId>>,
+{
+    type Output = InterpreterResult;
+
+    #[inline]
+    fn set_spec(&mut self, spec: <CTX::Cfg as Cfg>::Spec) -> bool {
+        <OpPrecompiles as PrecompileProvider<CTX>>::set_spec(&mut self.inner, spec)
+    }
+
+    #[inline]
+    fn run(
+        &mut self,
+        context: &mut CTX,
+        inputs: &CallInputs,
+    ) -> Result<Option<Self::Output>, alloc::string::String> {
+        // Check if this is a call to our native ERC-20 precompile
+        if inputs.target_address == NATIVE_TOKEN_ADDRESS {
+            let input_bytes = inputs.input.bytes(context);
+            let caller = inputs.caller;
+            let is_static = inputs.is_static;
+
+            // Execute native ERC-20 logic
+            let result = native_erc20::precompile_run(context, caller, &input_bytes, is_static);
+            return Ok(result);
+        }
+
+        // Delegate to inner OpPrecompiles for all other addresses
+        self.inner.run(context, inputs)
+    }
+
+    #[inline]
+    fn warm_addresses(&self) -> alloc::boxed::Box<impl Iterator<Item = alloy_primitives::Address>> {
+        // Return our custom address plus all the inner warm addresses
+        let mut addrs: alloc::vec::Vec<alloy_primitives::Address> =
+            <OpPrecompiles as PrecompileProvider<CTX>>::warm_addresses(&self.inner).collect();
+        addrs.push(NATIVE_TOKEN_ADDRESS);
+        alloc::boxed::Box::new(addrs.into_iter())
+    }
+
+    #[inline]
+    fn contains(&self, address: &alloy_primitives::Address) -> bool {
+        *address == NATIVE_TOKEN_ADDRESS ||
+            <OpPrecompiles as PrecompileProvider<CTX>>::contains(&self.inner, address)
+    }
+}
+
+/// PRAPH EVM Factory - uses PraphPrecompiles
+pub type PrphEvmFactory = OpEvmFactory;
 
 /// Optimism-related EVM configuration.
 #[derive(Debug)]
@@ -61,7 +143,7 @@ pub struct OpEvmConfig<
     ChainSpec = OpChainSpec,
     N: NodePrimitives = OpPrimitives,
     R = OpRethReceiptBuilder,
-    EvmFactory = OpEvmFactory,
+    EvmFactory = PrphEvmFactory,
 > {
     /// Inner [`OpBlockExecutorFactory`].
     pub executor_factory: OpBlockExecutorFactory<R, Arc<ChainSpec>, EvmFactory>,
@@ -98,7 +180,7 @@ impl<ChainSpec: OpHardforks, N: NodePrimitives, R> OpEvmConfig<ChainSpec, N, R> 
             executor_factory: OpBlockExecutorFactory::new(
                 receipt_builder,
                 chain_spec,
-                OpEvmFactory::default(),
+                PrphEvmFactory::default(),
             ),
             _pd: core::marker::PhantomData,
         }
