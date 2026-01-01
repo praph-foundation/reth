@@ -3,7 +3,7 @@
 use crate::{error::L1BlockInfoError, revm_spec_by_timestamp_after_bedrock, OpBlockExecutionError};
 use alloy_consensus::Transaction;
 use alloy_primitives::{hex, U16, U256};
-use op_revm_praph::L1BlockInfo;
+use op_revm::L1BlockInfo;
 use reth_execution_errors::BlockExecutionError;
 use reth_optimism_forks::OpHardforks;
 use reth_primitives_traits::BlockBody;

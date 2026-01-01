@@ -20,7 +20,7 @@ use alloy_primitives::U256;
 use core::fmt::Debug;
 use op_alloy_consensus::EIP1559ParamError;
 use op_alloy_rpc_types_engine::OpExecutionData;
-use op_revm_praph::{OpSpecId, OpTransaction};
+use op_revm::{OpSpecId, OpTransaction};
 use reth_chainspec::EthChainSpec;
 use reth_evm::{
     eth::NextEvmEnvAttributes, precompiles::PrecompilesMap, ConfigureEngineEvm, ConfigureEvm,
@@ -54,159 +54,9 @@ mod error;
 pub use error::OpBlockExecutionError;
 
 pub use alloy_op_evm::{OpBlockExecutionCtx, OpBlockExecutorFactory, OpEvm, OpEvmFactory};
-// Native ERC-20 precompile logic
+// Native ERC-20 precompile address (implemented in op-revm fork)
 mod native_erc20;
 pub use native_erc20::NATIVE_TOKEN_ADDRESS;
-
-use alloy_primitives::Bytes;
-use op_revm_praph::{precompiles::OpPrecompiles, OpContext};
-use revm::{
-    context::Cfg,
-    context_interface::ContextTr,
-    handler::PrecompileProvider,
-    interpreter::{CallInputs, Gas, InstructionResult, InterpreterResult},
-};
-
-/// PRAPH precompiles provider - extends OpPrecompiles with native ERC-20 at 0x0802
-#[derive(Debug, Clone)]
-pub struct PraphPrecompiles {
-    inner: OpPrecompiles,
-}
-
-impl Default for PraphPrecompiles {
-    fn default() -> Self {
-        Self { inner: OpPrecompiles::default() }
-    }
-}
-
-impl PraphPrecompiles {
-    /// Create new PraphPrecompiles wrapping OpPrecompiles
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl<CTX> PrecompileProvider<CTX> for PraphPrecompiles
-where
-    CTX: ContextTr<Cfg: Cfg<Spec = op_revm::OpSpecId>>,
-{
-    type Output = InterpreterResult;
-
-    #[inline]
-    fn set_spec(&mut self, spec: <CTX::Cfg as Cfg>::Spec) -> bool {
-        <OpPrecompiles as PrecompileProvider<CTX>>::set_spec(&mut self.inner, spec)
-    }
-
-    #[inline]
-    fn run(
-        &mut self,
-        context: &mut CTX,
-        inputs: &CallInputs,
-    ) -> Result<Option<Self::Output>, alloc::string::String> {
-        // Check if this is a call to our native ERC-20 precompile
-        if inputs.target_address == NATIVE_TOKEN_ADDRESS {
-            let input_bytes = inputs.input.bytes(context);
-            let caller = inputs.caller;
-            let is_static = inputs.is_static;
-
-            // Execute native ERC-20 logic
-            let result = native_erc20::precompile_run(context, caller, &input_bytes, is_static);
-            return Ok(result);
-        }
-
-        // Delegate to inner OpPrecompiles for all other addresses
-        self.inner.run(context, inputs)
-    }
-
-    #[inline]
-    fn warm_addresses(&self) -> alloc::boxed::Box<impl Iterator<Item = alloy_primitives::Address>> {
-        // Return our custom address plus all the inner warm addresses
-        let mut addrs: alloc::vec::Vec<alloy_primitives::Address> =
-            <OpPrecompiles as PrecompileProvider<CTX>>::warm_addresses(&self.inner).collect();
-        addrs.push(NATIVE_TOKEN_ADDRESS);
-        alloc::boxed::Box::new(addrs.into_iter())
-    }
-
-    #[inline]
-    fn contains(&self, address: &alloy_primitives::Address) -> bool {
-        *address == NATIVE_TOKEN_ADDRESS ||
-            <OpPrecompiles as PrecompileProvider<CTX>>::contains(&self.inner, address)
-    }
-}
-
-/// PRAPH EVM Factory - creates OpEvm instances with PraphPrecompiles
-/// This enables native PRAF token at address 0x805 as a stateful precompile
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PrphEvmFactory;
-
-impl PrphEvmFactory {
-    /// Create a new PRAPH EVM factory
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl alloy_evm::EvmFactory for PrphEvmFactory {
-    type Evm<DB: alloy_evm::Database, I: revm::Inspector<OpContext<DB>>> =
-        alloy_op_evm::OpEvm<DB, I, PraphPrecompiles>;
-    type Context<DB: alloy_evm::Database> = OpContext<DB>;
-    type Tx = op_revm::OpTransaction<revm::context::TxEnv>;
-    type Error<DBError: core::error::Error + Send + Sync + 'static> =
-        revm::context_interface::result::EVMError<DBError, op_revm::OpTransactionError>;
-    type HaltReason = op_revm::OpHaltReason;
-    type Spec = op_revm::OpSpecId;
-    type BlockEnv = revm::context::BlockEnv;
-    type Precompiles = PrecompilesMap;
-
-    fn create_evm<DB: alloy_evm::Database>(
-        &self,
-        db: DB,
-        input: alloy_evm::EvmEnv<Self::Spec>,
-    ) -> Self::Evm<DB, revm::inspector::NoOpInspector> {
-        use alloy_evm::EvmEnv;
-        use op_revm_praph::{l1block::L1BlockInfo, OpContext as OpCtx, OpTransaction};
-        use revm::{context::TxEnv, inspector::NoOpInspector, Context, Journal};
-
-        let EvmEnv { cfg_env, block_env } = input;
-
-        let context = OpCtx {
-            inner: Context {
-                cfg: cfg_env,
-                block: block_env,
-                tx: OpTransaction::new(TxEnv::default()),
-                journaled_state: Journal::new(db),
-            },
-            l1_block_info: L1BlockInfo::default(),
-        };
-
-        alloy_op_evm::OpEvm::new(context, NoOpInspector, PraphPrecompiles::new())
-    }
-
-    fn create_evm_with_inspector<DB: alloy_evm::Database, I: revm::Inspector<Self::Context<DB>>>(
-        &self,
-        db: DB,
-        input: alloy_evm::EvmEnv<Self::Spec>,
-        inspector: I,
-    ) -> Self::Evm<DB, I> {
-        use alloy_evm::EvmEnv;
-        use op_revm_praph::{l1block::L1BlockInfo, OpContext as OpCtx, OpTransaction};
-        use revm::{context::TxEnv, Context, Journal};
-
-        let EvmEnv { cfg_env, block_env } = input;
-
-        let context = OpCtx {
-            inner: Context {
-                cfg: cfg_env,
-                block: block_env,
-                tx: OpTransaction::new(TxEnv::default()),
-                journaled_state: Journal::new(db),
-            },
-            l1_block_info: L1BlockInfo::default(),
-        };
-
-        alloy_op_evm::OpEvm::new(context, inspector, PraphPrecompiles::new())
-    }
-}
 
 /// Optimism-related EVM configuration.
 #[derive(Debug)]
@@ -214,7 +64,7 @@ pub struct OpEvmConfig<
     ChainSpec = OpChainSpec,
     N: NodePrimitives = OpPrimitives,
     R = OpRethReceiptBuilder,
-    EvmFactory = PrphEvmFactory,
+    EvmFactory = OpEvmFactory,
 > {
     /// Inner [`OpBlockExecutorFactory`].
     pub executor_factory: OpBlockExecutorFactory<R, Arc<ChainSpec>, EvmFactory>,
@@ -251,7 +101,7 @@ impl<ChainSpec: OpHardforks, N: NodePrimitives, R> OpEvmConfig<ChainSpec, N, R> 
             executor_factory: OpBlockExecutorFactory::new(
                 receipt_builder,
                 chain_spec,
-                PrphEvmFactory::default(),
+                OpEvmFactory::default(),
             ),
             _pd: core::marker::PhantomData,
         }
@@ -434,7 +284,7 @@ mod tests {
     use alloy_eips::eip7685::Requests;
     use alloy_genesis::Genesis;
     use alloy_primitives::{bytes, map::HashMap, Address, LogData, B256};
-    use op_revm_praph::OpSpecId;
+    use op_revm::OpSpecId;
     use reth_chainspec::ChainSpec;
     use reth_evm::execute::ProviderError;
     use reth_execution_types::{
