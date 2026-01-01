@@ -9,7 +9,7 @@ use revm::{
 
 use op_revm::{l1block::L1BlockInfo, OpSpecId, OpTransaction};
 
-pub const NATIVE_TOKEN_ADDRESS: Address = address!("0000000000000000000000000000000000000802");
+pub const NATIVE_TOKEN_ADDRESS: Address = address!("0000000000000000000000000000000000000805");
 
 sol! {
     interface IERC20 {
@@ -22,6 +22,8 @@ sol! {
         function allowance(address owner, address spender) external view returns (uint256);
         function approve(address spender, uint256 amount) external returns (bool);
         function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+        function mint(address to, uint256 amount) external;
+        function setMinter(address minter) external;
     }
 
     event Transfer(address indexed from, address indexed to, uint256 value);
@@ -29,6 +31,8 @@ sol! {
 }
 
 const ALLOWANCE_SLOT: U256 = U256::ZERO;
+const MINTER_SLOT: U256 = U256::from(1);
+const ADMIN_ADDRESS: Address = address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"); // Anvil default dev key (Alice)
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeErc20Inspector;
@@ -317,6 +321,97 @@ where
                 }
             }
         }
+        IERC20::IERC20Calls::mint(args) => {
+            if is_static {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::new(),
+                    gas: Gas::new(0),
+                });
+            }
+
+            let recipient = args.to;
+            let amount = args.amount;
+
+            // Access Control: Only registered minter can call mint
+            let load = context.sload(NATIVE_TOKEN_ADDRESS, MINTER_SLOT)?;
+            let current_minter = Address::from_word(load.data.into());
+
+            // For dev mode, we allow the ADMIN_ADDRESS to mint as well
+            if caller != current_minter && caller != ADMIN_ADDRESS {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::from("Only authorized minter or admin can call mint"),
+                    gas: Gas::new(0),
+                });
+            }
+
+            // Mint by transferring from zero address (infinite supply)
+            // In revm, transfer from Address::ZERO often bypasses balance check or is allowed for
+            // minting
+            let transfer_result = context.journal_mut().transfer(Address::ZERO, recipient, amount);
+            match transfer_result {
+                Ok(_) => {
+                    // Emit Transfer event from zero address
+                    let log = Log {
+                        address: NATIVE_TOKEN_ADDRESS,
+                        data: LogData::new_unchecked(
+                            alloc::vec![
+                                Transfer::SIGNATURE_HASH,
+                                FixedBytes::from(Address::ZERO.into_word()),
+                                FixedBytes::from(recipient.into_word()),
+                            ],
+                            (amount,).abi_encode().into(),
+                        ),
+                    };
+                    context.journal_mut().log(log);
+
+                    Some(InterpreterResult {
+                        result: InstructionResult::Return,
+                        output: Bytes::new(),
+                        gas: Gas::new(0),
+                    })
+                }
+                Err(_) => {
+                    return Some(InterpreterResult {
+                        result: InstructionResult::Revert,
+                        output: Bytes::from("Failed to mint native tokens"),
+                        gas: Gas::new(0),
+                    });
+                }
+            }
+        }
+        IERC20::IERC20Calls::setMinter(args) => {
+            if is_static {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::new(),
+                    gas: Gas::new(0),
+                });
+            }
+
+            // Only admin can set minter
+            if caller != ADMIN_ADDRESS {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::from("Only admin can set minter"),
+                    gas: Gas::new(0),
+                });
+            }
+
+            let new_minter = args.minter;
+            let _ = context.sstore(
+                NATIVE_TOKEN_ADDRESS,
+                MINTER_SLOT,
+                U256::from_be_bytes(new_minter.into_word().0),
+            );
+
+            Some(InterpreterResult {
+                result: InstructionResult::Return,
+                output: Bytes::new(),
+                gas: Gas::new(0),
+            })
+        }
     }
 }
 
@@ -534,6 +629,79 @@ pub(crate) fn execute_native_erc20<DB: Database>(
                 gas: Gas::new(0),
             })
         }
+        IERC20::IERC20Calls::mint(args) => {
+            if is_static {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::new(),
+                    gas: Gas::new(0),
+                });
+            }
+            let to = args.to;
+            let amount = args.amount;
+
+            // Access Control
+            let load = context.sload(NATIVE_TOKEN_ADDRESS, MINTER_SLOT)?;
+            let current_minter = Address::from_word(load.data.into());
+            if caller != current_minter && caller != ADMIN_ADDRESS {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::from("Only authorized minter or admin can call mint"),
+                    gas: Gas::new(0),
+                });
+            }
+
+            let _ = context.balance(to)?;
+
+            let to_acc_entry = context.journaled_state.state.get_mut(&to)?;
+            to_acc_entry.info.balance = to_acc_entry.info.balance.checked_add(amount)?;
+            to_acc_entry.mark_touch();
+
+            let log = revm::primitives::Log {
+                address: NATIVE_TOKEN_ADDRESS,
+                data: revm::primitives::LogData::new_unchecked(
+                    vec![
+                        Transfer::SIGNATURE_HASH,
+                        FixedBytes::from(Address::ZERO.into_word()),
+                        FixedBytes::from(Address::from(to).into_word()),
+                    ],
+                    (amount,).abi_encode().into(),
+                ),
+            };
+            context.journaled_state.logs.push(log);
+
+            Some(InterpreterResult {
+                result: InstructionResult::Return,
+                output: Bytes::new(),
+                gas: Gas::new(0),
+            })
+        }
+        IERC20::IERC20Calls::setMinter(args) => {
+            if is_static {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::new(),
+                    gas: Gas::new(0),
+                });
+            }
+            if caller != ADMIN_ADDRESS {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::from("Only admin can set minter"),
+                    gas: Gas::new(0),
+                });
+            }
+            let _ = context.sstore(
+                NATIVE_TOKEN_ADDRESS,
+                MINTER_SLOT,
+                U256::from_be_bytes(args.minter.into_word().0),
+            );
+            Some(InterpreterResult {
+                result: InstructionResult::Return,
+                output: Bytes::new(),
+                gas: Gas::new(0),
+            })
+        }
     }
 }
 
@@ -732,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_native_token_address() {
-        assert_eq!(NATIVE_TOKEN_ADDRESS, address!("0000000000000000000000000000000000000802"));
+        assert_eq!(NATIVE_TOKEN_ADDRESS, address!("0000000000000000000000000000000000000805"));
     }
 
     #[test]
