@@ -7,7 +7,7 @@ use revm::{
     Inspector, Journal,
 };
 
-use op_revm::{l1block::L1BlockInfo, OpSpecId, OpTransaction};
+use op_revm_praph::{l1block::L1BlockInfo, OpSpecId, OpTransaction};
 
 pub const NATIVE_TOKEN_ADDRESS: Address = address!("0000000000000000000000000000000000000805");
 
@@ -31,13 +31,13 @@ sol! {
 }
 
 const ALLOWANCE_SLOT: U256 = U256::ZERO;
-const MINTER_SLOT: U256 = U256::from(1);
+const MINTER_SLOT: U256 = U256::from_limbs([1, 0, 0, 0]);
 const ADMIN_ADDRESS: Address = address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"); // Anvil default dev key (Alice)
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeErc20Inspector;
 
-type OpContext<DB> =
+pub type OpContext<DB> =
     Context<BlockEnv, OpTransaction<TxEnv>, CfgEnv<OpSpecId>, DB, Journal<DB>, L1BlockInfo>;
 
 impl<DB: Database> Inspector<OpContext<DB>> for NativeErc20Inspector {
