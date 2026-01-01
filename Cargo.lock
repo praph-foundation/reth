@@ -265,8 +265,6 @@ dependencies = [
 [[package]]
 name = "alloy-evm"
 version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c84786dbd1a354358a01fc682862a22a47ff8c9e9bf4472d8d36bb02e3da5e54"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -278,9 +276,12 @@ dependencies = [
  "alloy-sol-types",
  "auto_impl",
  "derive_more",
- "op-alloy",
+ "op-alloy-consensus",
+ "op-alloy-rpc-types",
  "op-revm",
  "revm",
+ "serde_json",
+ "test-case",
  "thiserror 2.0.17",
 ]
 
@@ -381,18 +382,18 @@ dependencies = [
 [[package]]
 name = "alloy-op-evm"
 version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85412ba830f756ada62e6a231db0d213ca7472c7161ed0086ae55ab262e8f9fc"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-evm",
+ "alloy-hardforks",
  "alloy-op-hardforks",
  "alloy-primitives",
  "auto_impl",
- "op-alloy",
+ "op-alloy-consensus",
  "op-revm",
  "revm",
+ "test-case",
  "thiserror 2.0.17",
 ]
 
@@ -6159,19 +6160,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
-name = "op-alloy"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7fddee84041ec456eb6a7c2718cc1a38c06f6260280eb30ff8718ecdbcb5f88"
-dependencies = [
- "op-alloy-consensus",
- "op-alloy-network",
- "op-alloy-provider",
- "op-alloy-rpc-types",
- "op-alloy-rpc-types-engine",
-]
-
-[[package]]
 name = "op-alloy-consensus"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6211,21 +6199,6 @@ dependencies = [
  "alloy-signer",
  "op-alloy-consensus",
  "op-alloy-rpc-types",
-]
-
-[[package]]
-name = "op-alloy-provider"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12ef7a7c6bfa366b29c44af9abe6e176c32ce54ed700ec1edd7526c469dcd28c"
-dependencies = [
- "alloy-network",
- "alloy-primitives",
- "alloy-provider",
- "alloy-rpc-types-engine",
- "alloy-transport",
- "async-trait",
- "op-alloy-rpc-types-engine",
 ]
 
 [[package]]
@@ -6300,17 +6273,6 @@ dependencies = [
 
 [[package]]
 name = "op-revm"
-version = "14.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f887a8353e22df6ce5b150e4d3a51838bc6a64d4644c5f7416bef70f442c2857"
-dependencies = [
- "auto_impl",
- "revm",
- "serde",
-]
-
-[[package]]
-name = "op-revm-praph"
 version = "14.0.0-praph"
 dependencies = [
  "alloy-primitives",
@@ -9478,7 +9440,7 @@ dependencies = [
  "alloy-sol-types",
  "op-alloy-consensus",
  "op-alloy-rpc-types-engine",
- "op-revm-praph",
+ "op-revm",
  "reth-chainspec",
  "reth-evm",
  "reth-execution-errors",

@@ -10,6 +10,8 @@ exclude = [".github/"]
 [workspace]
 members = [
     "crates/op-revm-fork",
+    "crates/alloy-op-evm-fork",
+    "crates/alloy-evm-fork",
     "bin/reth-bench/",
     "bin/reth-bench-compare/",
     "bin/reth/",
@@ -477,7 +479,8 @@ revm-inspector = { version = "12.0.2", default-features = false }
 revm-context = { version = "12.0.0", default-features = false }
 revm-context-interface = { version = "12.0.1", default-features = false }
 revm-database-interface = { version = "8.0.5", default-features = false }
-op-revm = { version = "14.0.0", default-features = false }
+# PRAPH: Use local op-revm fork for all workspace members
+op-revm = { path = "crates/op-revm-fork", default-features = false }
 revm-inspectors = "0.33.0"
 
 # eth
@@ -778,3 +781,11 @@ ipnet = "2.11"
 
 # alloy-evm = { git = "https://github.com/alloy-rs/evm", rev = "a69f0b45a6b0286e16072cb8399e02ce6ceca353" }
 # alloy-op-evm = { git = "https://github.com/alloy-rs/evm", rev = "a69f0b45a6b0286e16072cb8399e02ce6ceca353" }
+
+[patch.crates-io]
+# PRAPH: Override op-revm with local fork that includes native PRAF precompile
+op-revm = { path = "crates/op-revm-fork" }
+# PRAPH: Override alloy-op-evm to use our op-revm fork
+alloy-op-evm = { path = "crates/alloy-op-evm-fork" }
+# PRAPH: Override alloy-evm to use our op-revm fork  
+alloy-evm = { path = "crates/alloy-evm-fork" }
