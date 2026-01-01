@@ -32,7 +32,7 @@ use reth_ethereum_forks::{ChainHardforks, EthereumHardfork, ForkCondition, Hardf
 
 /// Dev hardforks
 pub static DEV_HARDFORKS: LazyLock<ChainHardforks> = LazyLock::new(|| {
-    const JOVIAN_TIMESTAMP: ForkCondition = ForkCondition::Timestamp(1761840000);
+    const JOVIAN_TIMESTAMP: ForkCondition = ForkCondition::Timestamp(u64::MAX);
     ChainHardforks::new(vec![
         (EthereumHardfork::Frontier.boxed(), ForkCondition::Block(0)),
         (EthereumHardfork::Homestead.boxed(), ForkCondition::Block(0)),
