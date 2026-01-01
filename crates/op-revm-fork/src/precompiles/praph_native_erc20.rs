@@ -47,9 +47,11 @@ pub fn run_native_praf<CTX>(
 where
     CTX: ContextTr,
 {
+    eprintln!("[DEBUG] Native PRAF 0x805 CALLED! target={:?}", inputs.target_address);
     let caller = inputs.caller;
     let is_static = inputs.is_static;
     let input_bytes = inputs.input.bytes(context);
+    eprintln!("[DEBUG] Caller: {:?}, Input length: {}, IsStatic: {}", caller, input_bytes.len(), is_static);
     precompile_run(context, caller, &input_bytes, is_static)
 }
 
@@ -311,4 +313,50 @@ fn get_map_slot(map_slot: U256, key: Address) -> U256 {
     hasher.update(key.into_word());
     hasher.update(map_slot.to_be_bytes::<32>());
     hasher.finalize().into()
+}
+
+// ===== Static Precompile for Precompiles Map =====
+
+use revm::precompile::{Precompile, PrecompileId, PrecompileResult, PrecompileOutput};
+
+/// Static precompile constant for native PRAF ERC-20
+pub const NATIVE_PRAF_PRECOMPILE: Precompile = Precompile::new(
+    PrecompileId::Custom(std::borrow::Cow::Borrowed("praph_native_praf")),
+    NATIVE_TOKEN_ADDRESS,
+    run_native_praf_static,
+);
+
+/// Static precompile function matching revm's signature
+fn run_native_praf_static(input: &[u8], _gas_limit: u64) -> PrecompileResult {
+    use alloc::string::ToString;
+    
+    eprintln!("[DEBUG STATIC] Native PRAF static precompile called! input_len={}", input.len());
+    
+    if input.len() >= 4 {
+        let selector = &input[0..4];
+        eprintln!("[DEBUG STATIC] Selector: {:02x?}", selector);
+        
+        match selector {
+            [0x95, 0xd8, 0x9b, 0x41] => {
+                let result = ("PRAF".to_string(),).abi_encode();
+                eprintln!("[DEBUG STATIC] Returning symbol: PRAF");
+                return Ok(PrecompileOutput::new(0, result.into()));
+            }
+            [0x06, 0xfd, 0xde, 0x03] => {
+                let result = ("PRAPH".to_string(),).abi_encode();
+                eprintln!("[DEBUG STATIC] Returning name: PRAPH");
+                return Ok(PrecompileOutput::new(0, result.into()));
+            }
+            [0x31, 0x3c, 0xe5, 0x67] => {
+                let result = (U256::from(18),).abi_encode();
+                eprintln!("[DEBUG STATIC] Returning decimals: 18");
+                return Ok(PrecompileOutput::new(0, result.into()));
+            }
+            _ => {
+                eprintln!("[DEBUG STATIC] Unknown selector");
+            }
+        }
+    }
+    
+    Ok(PrecompileOutput::new(0, Bytes::new()))
 }

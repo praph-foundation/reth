@@ -64,6 +64,8 @@ pub fn fjord() -> &'static Precompiles {
         let mut precompiles = Precompiles::cancun().clone();
         // RIP-7212: secp256r1 P256verify
         precompiles.extend([secp256r1::P256VERIFY]);
+        // PRAPH: Native PRAF ERC-20 precompile at 0x805
+        precompiles.extend([praph_native_erc20::NATIVE_PRAF_PRECOMPILE]);
         precompiles
     })
 }
@@ -75,6 +77,7 @@ pub fn granite() -> &'static Precompiles {
         let mut precompiles = fjord().clone();
         // Restrict bn254Pairing input size
         precompiles.extend([bn254_pair::GRANITE]);
+        // PRAPH: Native PRAF already included from fjord()
         precompiles
     })
 }
@@ -92,6 +95,7 @@ pub fn isthmus() -> &'static Precompiles {
             bls12_381::ISTHMUS_G2_MSM,
             bls12_381::ISTHMUS_PAIRING,
         ]);
+        // PRAPH: Native PRAF already included from granite()
         precompiles
     })
 }
@@ -119,6 +123,7 @@ pub fn jovian() -> &'static Precompiles {
             bls12_381::JOVIAN_G2_MSM,
             bls12_381::JOVIAN_PAIRING,
         ]);
+        // PRAPH: Native PRAF already included from isthmus()
 
         precompiles
     })
@@ -145,10 +150,12 @@ where
         context: &mut CTX,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
+        eprintln!("[DEBUG OpPrecompiles::run] Called with target={:?}", inputs.target_address);
         // PRAPH: Native PRAF ERC-20 precompile at 0x805
         const NATIVE_PRAF_ADDRESS: Address = address!("0000000000000000000000000000000000000805");
 
         if inputs.target_address == NATIVE_PRAF_ADDRESS {
+            eprintln!("[DEBUG OpPrecompiles::run] Matched 0x805! Calling native PRAF");
             // Call native PRAF precompile logic
             return Ok(praph_native_erc20::run_native_praf(context, inputs));
         }
@@ -158,12 +165,18 @@ where
 
     #[inline]
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        self.inner.warm_addresses()
+        // PRAPH: Include native PRAF address in warm addresses
+        const NATIVE_PRAF_ADDRESS: Address = address!("0000000000000000000000000000000000000805");
+        let native_addr = core::iter::once(NATIVE_PRAF_ADDRESS);
+        let inner_addrs = self.inner.warm_addresses();
+        Box::new(native_addr.chain(inner_addrs))
     }
 
     #[inline]
     fn contains(&self, address: &Address) -> bool {
-        self.inner.contains(address)
+        // PRAPH: Check for native PRAF address
+        const NATIVE_PRAF_ADDRESS: Address = address!("0000000000000000000000000000000000000805");
+        *address == NATIVE_PRAF_ADDRESS || self.inner.contains(address)
     }
 }
 

@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 rust-version = "1.88.0"
-name = "op-revm-praph"
+name = "op-revm"
 version = "14.0.0-praph"
 authors = ["Dragan Rakita <dragan0rakita@gmail.com>"]
 build = false
@@ -84,7 +84,7 @@ std = [
 ]
 
 [lib]
-name = "op_revm_praph"
+name = "op_revm"
 path = "src/lib.rs"
 
 [dependencies.auto_impl]
