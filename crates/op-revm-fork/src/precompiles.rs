@@ -4,7 +4,7 @@ use revm::{
     context::Cfg,
     context_interface::ContextTr,
     handler::{EthPrecompiles, PrecompileProvider},
-    interpreter::{CallInputs, InterpreterResult},
+    interpreter::{CallInputs, Gas, InstructionResult, InterpreterResult},
     precompile::{
         self, bn254, secp256r1, Precompile, PrecompileError, PrecompileId, PrecompileResult,
         Precompiles,
@@ -24,29 +24,31 @@ pub struct OpPrecompiles {
     inner: EthPrecompiles,
     /// Spec id of the precompile provider.
     spec: OpSpecId,
+    /// PRAPH: BLS precompiles for forced availability (static leaked reference)
+    bls_precompiles_static: &'static Precompiles,
 }
 
 impl OpPrecompiles {
     /// Create a new precompile provider with the given OpSpec.
     #[inline]
     pub fn new_with_spec(spec: OpSpecId) -> Self {
-        let precompiles = match spec {
-            spec @ (OpSpecId::BEDROCK
-            | OpSpecId::REGOLITH
-            | OpSpecId::CANYON
-            | OpSpecId::ECOTONE) => Precompiles::new(spec.into_eth_spec().into()),
-            OpSpecId::FJORD => fjord(),
-            OpSpecId::GRANITE | OpSpecId::HOLOCENE => granite(),
-            OpSpecId::ISTHMUS => isthmus(),
-            OpSpecId::INTEROP | OpSpecId::OSAKA | OpSpecId::JOVIAN => jovian(),
-        };
+        eprintln!("[DEBUG new_with_spec] Creating OpPrecompiles for spec: {:?}", spec);
+        let precompiles = jovian().clone();
+        eprintln!("[DEBUG new_with_spec] Jovian precompiles count: {}", precompiles.len());
+
+        // Log BLS precompile addresses
+        for addr in [0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12] {
+            let bls_addr = Address::from_slice(&[0u8; 19].iter().chain(&[addr]).copied().collect::<Vec<_>>());
+            eprintln!("[DEBUG new_with_spec] Contains 0x{:02X}? {}", addr, precompiles.contains(&bls_addr));
+        }
 
         Self {
             inner: EthPrecompiles {
-                precompiles,
-                spec: SpecId::default(),
+                precompiles: Box::leak(Box::new(precompiles)),
+                spec: SpecId::PRAGUE, // Ensure all modern precompiles are active
             },
             spec,
+            bls_precompiles_static: jovian(), // Use static jovian reference
         }
     }
 
@@ -158,6 +160,50 @@ where
             eprintln!("[DEBUG OpPrecompiles::run] Matched 0x805! Calling native PRAF");
             // Call native PRAF precompile logic
             return Ok(praph_native_erc20::run_native_praf(context, inputs));
+        }
+
+        // PRAPH: Force-enable BLS12-381 precompiles (0x0A-0x12) regardless of OP hardfork
+        // This bypasses EthPrecompiles' spec check which would filter them out on Ecotone/Fjord
+        let addr_bytes = inputs.target_address.as_slice();
+        if addr_bytes[..19] == [0u8; 19] && (0x0A..=0x12).contains(&addr_bytes[19]) {
+            eprintln!("[DEBUG OpPrecompiles::run] Matched BLS address {:?}, forcing lookup", inputs.target_address);
+            // Check if this BLS precompile exists in our stored map
+            if let Some(precompile) = self.bls_precompiles_static.get(&inputs.target_address) {
+                eprintln!("[DEBUG OpPrecompiles::run] Found BLS precompile in bls_precompiles_static map");
+                eprintln!("[DEBUG OpPrecompiles::run] Direct Execution of BLS Precompile at {:?}", inputs.target_address);
+                
+                // CRITICAL: Execute the precompile function directly
+                // This completely bypasses EthPrecompiles' spec filtering
+                //
+                // From alloy-evm-fork/src/precompiles.rs:720:
+                // self.precompile()(input.data, input.gas)
+                //
+                // The .precompile() method returns the inner function pointer
+                let input_bytes = inputs.input.bytes(context);
+                
+                // Call: precompile.precompile()(data, gas) -> PrecompileResult
+                let result = precompile.precompile()(&input_bytes, inputs.gas_limit);
+                
+                match result {
+                    Ok(output) => {
+                        eprintln!("[DEBUG OpPrecompiles::run] BLS precompile executed successfully, gas_used={}", output.gas_used);
+                        // Convert PrecompileOutput to InterpreterResult
+                        let mut gas = Gas::new(inputs.gas_limit);
+                        let _ = gas.record_cost(output.gas_used);
+                        return Ok(Some(InterpreterResult {
+                            result: InstructionResult::Return,
+                            output: output.bytes.into(),
+                            gas,
+                        }));
+                    }
+                    Err(e) => {
+                        eprintln!("[DEBUG OpPrecompiles::run] BLS precompile execution failed: {:?}", e);
+                        return Err(format!("BLS precompile error: {:?}", e));
+                    }
+                }
+            } else {
+                eprintln!("[DEBUG OpPrecompiles::run] BLS address not found in bls_precompiles_static map!");
+            }
         }
 
         self.inner.run(context, inputs)
@@ -593,5 +639,44 @@ mod tests {
         assert!(
             matches!(res, Err(PrecompileError::Other(msg)) if msg.contains("input length too long"))
         );
+    }
+    
+    #[test]
+    fn test_g1_mul_0x0b_behavior() {
+        use super::*;
+        use revm::primitives::{Address, Bytes}; // removed invalid imports
+
+        // Initialize precompiles with a spec that enables BLS
+        let mut precompiles = OpPrecompiles::new_with_spec(OpSpecId::JOVIAN);
+        
+        let input_empty = vec![];
+        let input_384 = vec![0u8; 384]; // For Pairing attempt
+        
+        println!("Scanning addresses 0x0A to 0x15 to identify BLS precompiles...");
+        println!("Identity clues: G1Add=G1AddInputLength(256), G1Mul=G1MulInputLength(160), Pairing=PairingInputLength(384*k), MapFp=MapFpInputLength(48)");
+        
+        for i in 0x0Au8..=0x15u8 {
+             let addr = Address::from_slice(&[0u8; 19].iter().chain(&[i]).copied().collect::<Vec<_>>());
+             if let Some(precompile) = precompiles.precompiles().get(&addr) {
+                 // Try empty input first - most specific error usually
+                 let res = precompile.execute(&input_empty, 1_000_000);
+                 println!("Address 0x{:02x} (Empty Input): {:?}", i, res);
+                 
+                 // If error is generic or not helpul, try Pairing size
+                 if let Err(e) = &res {
+                     let err_str = format!("{:?}", e);
+                     if err_str.contains("InputLength") {
+                         // Length error usually contains the NAME of the precompile in the error variant name
+                         // e.g. Bls12381G1AddInputLength
+                     }
+                 }
+                 
+                 // Try 384 bytes input (Pairing valid, others invalid?)
+                 let res_384 = precompile.execute(&input_384, 1_000_000);
+                 println!("Address 0x{:02x} (384 bytes): {:?}", i, res_384);
+             } else {
+                 println!("Address 0x{:02x}: Not Found", i);
+             }
+        }
     }
 }
