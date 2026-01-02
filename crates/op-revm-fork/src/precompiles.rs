@@ -152,12 +152,10 @@ where
         context: &mut CTX,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
-        eprintln!("[DEBUG OpPrecompiles::run] Called with target={:?}", inputs.target_address);
         // PRAPH: Native PRAF ERC-20 precompile at 0x805
         const NATIVE_PRAF_ADDRESS: Address = address!("0000000000000000000000000000000000000805");
 
         if inputs.target_address == NATIVE_PRAF_ADDRESS {
-            eprintln!("[DEBUG OpPrecompiles::run] Matched 0x805! Calling native PRAF");
             // Call native PRAF precompile logic
             return Ok(praph_native_erc20::run_native_praf(context, inputs));
         }
@@ -166,11 +164,8 @@ where
         // This bypasses EthPrecompiles' spec check which would filter them out on Ecotone/Fjord
         let addr_bytes = inputs.target_address.as_slice();
         if addr_bytes[..19] == [0u8; 19] && (0x0A..=0x12).contains(&addr_bytes[19]) {
-            eprintln!("[DEBUG OpPrecompiles::run] Matched BLS address {:?}, forcing lookup", inputs.target_address);
             // Check if this BLS precompile exists in our stored map
             if let Some(precompile) = self.bls_precompiles_static.get(&inputs.target_address) {
-                eprintln!("[DEBUG OpPrecompiles::run] Found BLS precompile in bls_precompiles_static map");
-                eprintln!("[DEBUG OpPrecompiles::run] Direct Execution of BLS Precompile at {:?}", inputs.target_address);
                 
                 // CRITICAL: Execute the precompile function directly
                 // This completely bypasses EthPrecompiles' spec filtering
