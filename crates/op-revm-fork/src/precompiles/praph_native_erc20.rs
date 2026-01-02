@@ -29,17 +29,21 @@ sol! {
         function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
         function mint(address to, uint256 amount) external returns (bool);
         function burn(address from, uint256 amount) external returns (bool);
-        function setMinter(address minter) external;
     }
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
+// Bridge contract address (deterministic deployment from DEV_ACCOUNT)
+// This is the ONLY authorized minter for the Native PRAF token
+// TODO: Update this address for mainnet/public network deployment
+//       Current address is for local devnet (nonce=0 from 0xf39Fd...92266)
+pub const BRIDGE_ADDRESS: Address = address!("5fbdb2315678afecb367f032d93f642f64180aa3");
+
+// Storage slots
 const ALLOWANCE_SLOT: U256 = U256::ZERO;
-const MINTER_SLOT: U256 = U256::from_limbs([1, 0, 0, 0]);
 const TOTAL_SUPPLY_SLOT: U256 = U256::from_limbs([2, 0, 0, 0]);
-const ADMIN_ADDRESS: Address = address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
 
 /// Precompile entrypoint called from OpPrecompiles::run()
 pub fn run_native_praf<CTX>(
@@ -249,17 +253,14 @@ where
             let recipient = args.to;
             let amount = args.amount;
 
-            // Access Control: Only registered minter can call mint
-            let load = context.sload(NATIVE_TOKEN_ADDRESS, MINTER_SLOT)?;
-            let current_minter = Address::from_word(load.data.into());
-
-            if caller != current_minter && caller != ADMIN_ADDRESS {
-                // WARN: Still keeping the log for visibility during initial production test
-                eprintln!("[WARN] Access control check: caller {:?}, minter {:?}, admin {:?}", caller, current_minter, ADMIN_ADDRESS);
-                
+            // Access Control: ONLY Bridge contract can mint (full decentralization)
+            // No admin backdoor - Bridge is the sole authorized minter
+            if caller != BRIDGE_ADDRESS {
+                eprintln!("[WARN] Unauthorized mint attempt: caller={:?}, authorized_bridge={:?}", 
+                         caller, BRIDGE_ADDRESS);
                 return Some(InterpreterResult {
                     result: InstructionResult::Revert,
-                    output: Bytes::from("Only authorized minter or admin can call mint"),
+                    output: Bytes::from("Only Bridge contract can mint"),
                     gas: Gas::new(0),
                 });
             }
@@ -380,35 +381,6 @@ where
             }
         }
 
-        IERC20::IERC20Calls::setMinter(args) => {
-            if is_static {
-                return Some(InterpreterResult {
-                    result: InstructionResult::Revert,
-                    output: Bytes::new(),
-                    gas: Gas::new(0),
-                });
-            }
-
-            if caller != ADMIN_ADDRESS {
-                return Some(InterpreterResult {
-                    result: InstructionResult::Revert,
-                    output: Bytes::from("Only admin"),
-                    gas: Gas::new(0),
-                });
-            }
-
-            context.sstore(
-                NATIVE_TOKEN_ADDRESS,
-                MINTER_SLOT,
-                U256::from_be_bytes(args.minter.into_word().0),
-            )?;
-
-            Some(InterpreterResult {
-                result: InstructionResult::Return,
-                output: Bytes::new(),
-                gas: Gas::new(0),
-            })
-        }
     }
 }
 
@@ -428,5 +400,5 @@ fn get_map_slot(map_slot: U256, key: Address) -> U256 {
 //   - OpPrecompiles::contains() returning true for 0x805
 //   - OpPrecompiles::run() calling run_native_praf() which has database access
 //
-// This ensures that all ERC-20 methods (name, symbol, decimals, balanceOf, mint, setMinter)
+// This ensures that all ERC-20 methods (name, symbol, decimals, balanceOf, mint, burn)
 // work correctly with full state/database access.
