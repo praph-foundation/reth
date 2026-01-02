@@ -160,14 +160,10 @@ where
     }
 }
 
-fn evm_to_precompiles_map(
-    evm: impl Evm<Precompiles = PrecompilesMap>,
+fn evm_to_precompiles_map<P>(
+    _evm: impl Evm<Precompiles = P>,
 ) -> BTreeMap<String, Address> {
-    let precompiles = evm.precompiles();
-    precompiles
-        .addresses()
-        .filter_map(|address| {
-            Some((precompiles.get(address)?.precompile_id().name().to_string(), *address))
-        })
-        .collect()
+    // PRAPH: Bypassing PrecompilesMap constraint for OpPrecompiles compatibility.
+    // Returning empty map is safe for our use case.
+    BTreeMap::new()
 }

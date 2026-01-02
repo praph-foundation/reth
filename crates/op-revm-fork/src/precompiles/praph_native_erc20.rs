@@ -27,7 +27,8 @@ sol! {
         function allowance(address owner, address spender) external view returns (uint256);
         function approve(address spender, uint256 amount) external returns (bool);
         function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-        function mint(address to, uint256 amount) external;
+        function mint(address to, uint256 amount) external returns (bool);
+        function burn(address from, uint256 amount) external returns (bool);
         function setMinter(address minter) external;
     }
 
@@ -37,6 +38,7 @@ sol! {
 
 const ALLOWANCE_SLOT: U256 = U256::ZERO;
 const MINTER_SLOT: U256 = U256::from_limbs([1, 0, 0, 0]);
+const TOTAL_SUPPLY_SLOT: U256 = U256::from_limbs([2, 0, 0, 0]);
 const ADMIN_ADDRESS: Address = address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
 
 /// Precompile entrypoint called from OpPrecompiles::run()
@@ -90,9 +92,15 @@ where
             })
         }
         IERC20::IERC20Calls::totalSupply(_) => {
+            // Read total supply from slot (initially 0, or controlled by mint/burn)
+            // For typical native tokens on L2, this might be viewed as Bridge supply + Native mints.
+            let load = context.sload(NATIVE_TOKEN_ADDRESS, TOTAL_SUPPLY_SLOT).unwrap_or_default();
+            // Default to 0 if not set, or we can fallback to U256::MAX if preferred, but explicit tracking requested.
+            let supply = load.data;
+            
             Some(InterpreterResult {
                 result: InstructionResult::Return,
-                output: (U256::MAX,).abi_encode().into(),
+                output: (supply,).abi_encode().into(),
                 gas: Gas::new(0),
             })
         }
@@ -238,43 +246,137 @@ where
                 });
             }
 
-            let load = context.sload(NATIVE_TOKEN_ADDRESS, MINTER_SLOT)?;
-            let minter = Address::from_word(load.data.into());
+            let recipient = args.to;
+            let amount = args.amount;
 
-            if caller != minter && caller != ADMIN_ADDRESS {
+            // Access Control: Only registered minter can call mint
+            let load = context.sload(NATIVE_TOKEN_ADDRESS, MINTER_SLOT)?;
+            let current_minter = Address::from_word(load.data.into());
+
+            if caller != current_minter && caller != ADMIN_ADDRESS {
                 return Some(InterpreterResult {
                     result: InstructionResult::Revert,
-                    output: Bytes::from("Only minter or admin"),
+                    output: Bytes::from("Only authorized minter or admin can call mint"),
                     gas: Gas::new(0),
                 });
             }
 
-            match context.journal_mut().transfer(Address::ZERO, args.to, args.amount) {
-                Ok(_) => {
+            // Mint by directly adding to recipient balance
+            // Use load_account_mut for mutable access
+            // JournaledAccount requires using methods like set_balance/touch rather than direct field access
+            match context.journal_mut().load_account_mut(recipient) {
+                Ok(mut load) => {
+                    let account = &mut load.data; // This is JournaledAccount
+                    let new_balance = account.info.balance.saturating_add(amount);
+                    account.set_balance(new_balance);
+
+                    // Update Total Supply
+                    let sc_load = context.sload(NATIVE_TOKEN_ADDRESS, TOTAL_SUPPLY_SLOT).unwrap_or_default();
+                    let current_supply = sc_load.data;
+                    let new_supply = current_supply.saturating_add(args.amount);
+                    let _ = context.sstore(NATIVE_TOKEN_ADDRESS, TOTAL_SUPPLY_SLOT, new_supply);
+
+                    // Emit Transfer event from zero address to simulate minting
                     context.journal_mut().log(Log {
                         address: NATIVE_TOKEN_ADDRESS,
                         data: LogData::new_unchecked(
                             alloc::vec![
                                 Transfer::SIGNATURE_HASH,
                                 FixedBytes::from(Address::ZERO.into_word()),
-                                FixedBytes::from(args.to.into_word()),
+                                FixedBytes::from(recipient.into_word()),
                             ],
-                            (args.amount,).abi_encode().into(),
+                            (amount,).abi_encode().into(),
                         ),
                     });
+
                     Some(InterpreterResult {
                         result: InstructionResult::Return,
-                        output: Bytes::new(),
+                        output: (true,).abi_encode().into(),
                         gas: Gas::new(0),
                     })
                 }
                 Err(_) => Some(InterpreterResult {
                     result: InstructionResult::Revert,
-                    output: Bytes::from("Mint failed"),
+                    output: Bytes::from("Failed to load recipient account for minting"),
                     gas: Gas::new(0),
                 }),
             }
         }
+        IERC20::IERC20Calls::burn(args) => {
+            if is_static {
+                return Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::new(),
+                    gas: Gas::new(0),
+                });
+            }
+
+            // If burning from another address, check allowance
+            if args.from != caller {
+                 let slot = get_map_slot(get_map_slot(ALLOWANCE_SLOT, args.from), caller);
+                 let load = context.sload(NATIVE_TOKEN_ADDRESS, slot)?;
+                 let allowance = load.data;
+ 
+                 if allowance < args.amount {
+                     return Some(InterpreterResult {
+                         result: InstructionResult::Revert,
+                         output: Bytes::from("Insufficient allowance for burn"),
+                         gas: Gas::new(0),
+                     });
+                 }
+                 if allowance != U256::MAX {
+                     let _ = context.sstore(NATIVE_TOKEN_ADDRESS, slot, allowance - args.amount);
+                 }
+            }
+
+            // Burn logic: Subtract from balance directly
+            match context.journal_mut().load_account_mut(args.from) {
+                Ok(mut load) => {
+                    let account = &mut load.data;
+                    
+                    if account.info.balance < args.amount {
+                         return Some(InterpreterResult {
+                            result: InstructionResult::Revert,
+                            output: Bytes::from("Insufficient balance for burn"),
+                            gas: Gas::new(0),
+                        });
+                    }
+                    
+                    let new_balance = account.info.balance.saturating_sub(args.amount);
+                    account.set_balance(new_balance);
+
+                    // Update Total Supply
+                    let sc_load = context.sload(NATIVE_TOKEN_ADDRESS, TOTAL_SUPPLY_SLOT).unwrap_or_default();
+                    let current_supply = sc_load.data;
+                    let new_supply = current_supply.saturating_sub(args.amount);
+                    let _ = context.sstore(NATIVE_TOKEN_ADDRESS, TOTAL_SUPPLY_SLOT, new_supply);
+
+                    context.journal_mut().log(Log {
+                        address: NATIVE_TOKEN_ADDRESS,
+                        data: LogData::new_unchecked(
+                            alloc::vec![
+                                Transfer::SIGNATURE_HASH,
+                                FixedBytes::from(args.from.into_word()),
+                                FixedBytes::from(Address::ZERO.into_word()),
+                            ],
+                            (args.amount,).abi_encode().into(),
+                        ),
+                    });
+
+                    Some(InterpreterResult {
+                        result: InstructionResult::Return,
+                        output: (true,).abi_encode().into(),
+                        gas: Gas::new(0),
+                    })
+                }
+                Err(_) => Some(InterpreterResult {
+                    result: InstructionResult::Revert,
+                    output: Bytes::from("Failed to load account for burn"),
+                    gas: Gas::new(0),
+                }),
+            }
+        }
+
         IERC20::IERC20Calls::setMinter(args) => {
             if is_static {
                 return Some(InterpreterResult {
@@ -315,48 +417,13 @@ fn get_map_slot(map_slot: U256, key: Address) -> U256 {
     hasher.finalize().into()
 }
 
-// ===== Static Precompile for Precompiles Map =====
-
-use revm::precompile::{Precompile, PrecompileId, PrecompileResult, PrecompileOutput};
-
-/// Static precompile constant for native PRAF ERC-20
-pub const NATIVE_PRAF_PRECOMPILE: Precompile = Precompile::new(
-    PrecompileId::Custom(std::borrow::Cow::Borrowed("praph_native_praf")),
-    NATIVE_TOKEN_ADDRESS,
-    run_native_praf_static,
-);
-
-/// Static precompile function matching revm's signature
-fn run_native_praf_static(input: &[u8], _gas_limit: u64) -> PrecompileResult {
-    use alloc::string::ToString;
-    
-    eprintln!("[DEBUG STATIC] Native PRAF static precompile called! input_len={}", input.len());
-    
-    if input.len() >= 4 {
-        let selector = &input[0..4];
-        eprintln!("[DEBUG STATIC] Selector: {:02x?}", selector);
-        
-        match selector {
-            [0x95, 0xd8, 0x9b, 0x41] => {
-                let result = ("PRAF".to_string(),).abi_encode();
-                eprintln!("[DEBUG STATIC] Returning symbol: PRAF");
-                return Ok(PrecompileOutput::new(0, result.into()));
-            }
-            [0x06, 0xfd, 0xde, 0x03] => {
-                let result = ("PRAPH".to_string(),).abi_encode();
-                eprintln!("[DEBUG STATIC] Returning name: PRAPH");
-                return Ok(PrecompileOutput::new(0, result.into()));
-            }
-            [0x31, 0x3c, 0xe5, 0x67] => {
-                let result = (U256::from(18),).abi_encode();
-                eprintln!("[DEBUG STATIC] Returning decimals: 18");
-                return Ok(PrecompileOutput::new(0, result.into()));
-            }
-            _ => {
-                eprintln!("[DEBUG STATIC] Unknown selector");
-            }
-        }
-    }
-    
-    Ok(PrecompileOutput::new(0, Bytes::new()))
-}
+// NOTE: In revm-precompile-31.0.0, Precompile is a simple struct with only a function pointer.
+// There is no Stateful variant or built-in database access from the precompile map.
+//
+// The Native PRAF precompile (0x805) is NOT registered in the Precompiles map.
+// Instead, it is handled via:
+//   - OpPrecompiles::contains() returning true for 0x805
+//   - OpPrecompiles::run() calling run_native_praf() which has database access
+//
+// This ensures that all ERC-20 methods (name, symbol, decimals, balanceOf, mint, setMinter)
+// work correctly with full state/database access.

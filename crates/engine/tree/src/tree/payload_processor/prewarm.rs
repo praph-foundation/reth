@@ -414,15 +414,8 @@ where
         let mut evm = evm_config.evm_with_env(state_provider, evm_env);
 
         if !precompile_cache_disabled {
-            // Only cache pure precompiles to avoid issues with stateful precompiles
-            evm.precompiles_mut().map_pure_precompiles(|address, precompile| {
-                CachedPrecompile::wrap(
-                    precompile,
-                    precompile_cache_map.cache_for_address(*address),
-                    spec_id,
-                    None, // No metrics for prewarm
-                )
-            });
+             // PRAPH: Precompile cache disabled because we use stateful OpPrecompiles
+             // and the original optimization relies on PrecompilesMap specific methods
         }
 
         Some((evm, metrics, terminate_execution))

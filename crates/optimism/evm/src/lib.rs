@@ -55,8 +55,8 @@ pub use error::OpBlockExecutionError;
 
 pub use alloy_op_evm::{OpBlockExecutionCtx, OpBlockExecutorFactory, OpEvm, OpEvmFactory};
 // Native ERC-20 precompile address (implemented in op-revm fork)
-mod native_erc20;
-pub use native_erc20::NATIVE_TOKEN_ADDRESS;
+
+pub const NATIVE_TOKEN_ADDRESS: alloy_primitives::Address = alloy_primitives::address!("0000000000000000000000000000000000000805");
 
 /// Optimism-related EVM configuration.
 #[derive(Debug)]
@@ -136,7 +136,6 @@ where
                     + FromTxWithEncoded<R::Transaction>
                     + TransactionEnv
                     + OpTxEnv,
-            Precompiles = PrecompilesMap,
             Spec = OpSpecId,
             BlockEnv = BlockEnv,
         > + Debug,

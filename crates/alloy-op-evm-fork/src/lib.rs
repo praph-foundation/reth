@@ -169,30 +169,21 @@ impl EvmFactory for OpEvmFactory {
     type HaltReason = OpHaltReason;
     type Spec = OpSpecId;
     type BlockEnv = BlockEnv;
-    type Precompiles = PrecompilesMap;
+    type Precompiles = OpPrecompiles;
 
     fn create_evm<DB: Database>(
         &self,
         db: DB,
         input: EvmEnv<OpSpecId>,
     ) -> Self::Evm<DB, NoOpInspector> {
-        let spec_id = input.cfg_env.spec;
-        
-        // PRAPH: Get base OP precompiles and add our native PRAF at 0x805
-        let mut precompiles_map = PrecompilesMap::from_static(
-            OpPrecompiles::new_with_spec(spec_id).precompiles(),
-        );
-        
-        // TODO: Add native PRAF precompile wrapper here
-        // For now, this will use OpPrecompiles provider logic via run()
-        
+        // PRAPH: Use default OpPrecompiles from build_op_with_inspector
+        // This includes native PRAF at 0x805 via OpPrecompiles::run()
         OpEvm {
             inner: Context::op()
                 .with_db(db)
                 .with_block(input.block_env)
                 .with_cfg(input.cfg_env)
-                .build_op_with_inspector(NoOpInspector {})
-                .with_precompiles(precompiles_map),
+                .build_op_with_inspector(NoOpInspector {}),
             inspect: false,
         }
     }
@@ -203,22 +194,14 @@ impl EvmFactory for OpEvmFactory {
         input: EvmEnv<OpSpecId>,
         inspector: I,
     ) -> Self::Evm<DB, I> {
-        let spec_id = input.cfg_env.spec;
-        
-        // PRAPH: Get base OP precompiles and add our native PRAF at 0x805
-        let mut precompiles_map = PrecompilesMap::from_static(
-            OpPrecompiles::new_with_spec(spec_id).precompiles(),
-        );
-        
-        // TODO: Add native PRAF precompile wrapper here
-        
+        // PRAPH: Use default OpPrecompiles from build_op_with_inspector
+        // This includes native PRAF at 0x805 via OpPrecompiles::run()
         OpEvm {
             inner: Context::op()
                 .with_db(db)
                 .with_block(input.block_env)
                 .with_cfg(input.cfg_env)
-                .build_op_with_inspector(inspector)
-                .with_precompiles(precompiles_map),
+                .build_op_with_inspector(inspector),
             inspect: true,
         }
     }

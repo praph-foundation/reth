@@ -64,8 +64,8 @@ pub fn fjord() -> &'static Precompiles {
         let mut precompiles = Precompiles::cancun().clone();
         // RIP-7212: secp256r1 P256verify
         precompiles.extend([secp256r1::P256VERIFY]);
-        // PRAPH: Native PRAF ERC-20 precompile at 0x805
-        precompiles.extend([praph_native_erc20::NATIVE_PRAF_PRECOMPILE]);
+        // PRAPH: Native PRAF ERC-20 (0x805) is NOT registered in inner Precompiles
+        // It is handled via OpPrecompiles::contains() and OpPrecompiles::run() for database access
         precompiles
     })
 }
