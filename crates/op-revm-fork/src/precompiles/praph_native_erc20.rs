@@ -316,7 +316,8 @@ where
             }
 
             // If burning from another address, check allowance
-            if args.from != caller {
+            // Exception: Bridge contract can burn from anyone (used for withdrawals)
+            if args.from != caller && caller != BRIDGE_ADDRESS {
                  let slot = get_map_slot(get_map_slot(ALLOWANCE_SLOT, args.from), caller);
                  let load = context.sload(NATIVE_TOKEN_ADDRESS, slot)?;
                  let allowance = load.data;
